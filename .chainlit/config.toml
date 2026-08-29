@@ -1,0 +1,12 @@
+[project]
+allow_origins = ["*"]
+
+[features]
+unsafe_allow_html = false
+
+[UI]
+name = "Legal RAG Assistant"
+default_theme = "dark"
+
+[meta]
+generated_by = "2.12.0"
