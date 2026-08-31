@@ -33,11 +33,11 @@ async def close_pool():
     if pool is None:
         return
     try:
-        # ``terminate`` immediately drops all connections instead of waiting
+        # close(timeout=0) immediately drops all connections instead of waiting
         # for in-use connections to finish — critical during uvicorn reload
         # so the old process does not hold Supabase connections hostage.
-        await pool.terminate()
-        logger.info("PostgreSQL connection pool terminated.")
+        await pool.close(timeout=0)
+        logger.info("PostgreSQL connection pool closed.")
     except Exception:
         logger.exception("Error while closing the connection pool.")
     finally:

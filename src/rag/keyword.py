@@ -7,6 +7,10 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _truncate(text: str, length: int = 60) -> str:
+    return text[:length] + "..." if len(text) > length else text
+
+
 class KeywordSearcher:
     def __init__(self, top_k: int = settings.sparse_top_k):
         self.top_k = top_k
@@ -35,11 +39,18 @@ class KeywordSearcher:
                     (query, collection_name, query, k),
                 )
                 rows = await cur.fetchall()
-        logger.debug(
-            "Keyword search for collection '%s' returned %d results in %.2fs.",
-            collection_name, len(rows), time.perf_counter() - start,
+
+        results = [{"id": r[0], "text": r[1], "score": float(r[2])} for r in rows]
+        top_scores = [f"{r['score']:.4f}" for r in results[:3]]
+
+        logger.info(
+            "[KEYWORD] query=%r collection='%s' top_k=%d results=%d "
+            "top_scores=[%s] time=%.2fs",
+            _truncate(query), collection_name, k, len(results),
+            ", ".join(top_scores) if top_scores else "none",
+            time.perf_counter() - start,
         )
-        return [{"id": r[0], "text": r[1], "score": float(r[2])} for r in rows]
+        return results
 
 
 _default_keyword_searcher = KeywordSearcher()
