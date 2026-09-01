@@ -6,6 +6,7 @@ from src.rag.dense import DenseSearcher
 from src.rag.keyword import KeywordSearcher
 from src.rag.fusion import ReciprocalRankFusion
 from src.rag.generator import Generator
+from src.rag.semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +22,24 @@ class HybridPipeline:
         keyword_searcher: Optional[KeywordSearcher] = None,
         fusion: Optional[ReciprocalRankFusion] = None,
         generator: Optional[Generator] = None,
+        cache: Optional[SemanticCache] = None,
     ):
         self.dense_searcher = dense_searcher or DenseSearcher()
         self.keyword_searcher = keyword_searcher or KeywordSearcher()
         self.fusion = fusion or ReciprocalRankFusion()
         self.generator = generator or Generator()
+        self.cache = cache or SemanticCache()
+        # self.cache = cache or SemanticCache(ttl_hours=24)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     async def _should_use_bm25(self, query: str) -> bool:
-        """Decide if sparse/keyword search is needed for this query."""
+        """Decide if sparse/keyword search is needed for this query.
+
+        Kept as a fallback; the pipeline now prefers the combined route_query().
+        """
         return await self.generator.should_use_bm25(query)
 
     async def _retrieve_single(
@@ -124,20 +131,36 @@ class HybridPipeline:
             _truncate(query), collection_name, session_id, use_bm25,
         )
 
-        # Step 1: BM25 routing
+        # Step 0: Semantic cache check
+        cached, query_emb = await self.cache.get(query, collection_name=collection_name)
+        if cached is not None:
+            answer, similarity = cached
+            logger.info(
+                "[PIPELINE] cache hit similarity=%.4f answer_len=%d (%.2fs)",
+                similarity, len(answer), time.perf_counter() - start,
+            )
+            return answer
+
+        # Step 1: Combined routing (BM25 + multi-hop in one LLM call)
         t0 = time.perf_counter()
-        if use_bm25 is None:
-            requires_bm25 = await self._should_use_bm25(query)
+        if use_bm25 is not None:
+            routing = {"use_bm25": use_bm25, "is_multi_hop": False}
+            # Still need multi-hop decision when bm25 is forced
+            routing = await self.generator.route_query(query)
+            routing["use_bm25"] = use_bm25
         else:
-            requires_bm25 = use_bm25
+            routing = await self.generator.route_query(query)
+        requires_bm25 = routing["use_bm25"]
         logger.info(
-            "[ROUTER] BM25=%s (decided in %.2fs)",
-            "YES" if requires_bm25 else "NO", time.perf_counter() - t0,
+            "[ROUTER] bm25=%s multi_hop=%s (decided in %.2fs)",
+            "YES" if requires_bm25 else "NO",
+            "YES" if routing["is_multi_hop"] else "NO",
+            time.perf_counter() - t0,
         )
 
-        # Step 2: Multi-hop decomposition
+        # Step 2: Decomposition (only calls LLM if multi-hop)
         t_decomp = time.perf_counter()
-        sub_queries = await self.generator._decompose_query(query)
+        sub_queries = await self.generator._decompose_query(query, is_multi_hop=routing["is_multi_hop"])
         is_multi_hop = len(sub_queries) > 1
         logger.info(
             "[DECOMPOSE] multi_hop=%s sub_queries=%d %r (in %.2fs)",
@@ -181,6 +204,9 @@ class HybridPipeline:
             "[GENERATION] answer_len=%d (in %.2fs)", len(answer), time.perf_counter() - t3,
         )
 
+        # Step 6: Store in semantic cache (reuse embedding from Step 0)
+        await self.cache.store(query, answer, collection_name=collection_name, query_embedding=query_emb)
+
         total = time.perf_counter() - start
         logger.info(
             "[PIPELINE] completed in %.2fs (multi_hop=%s, sub_queries=%d, "
@@ -203,20 +229,40 @@ class HybridPipeline:
             _truncate(query), collection_name, session_id, use_bm25,
         )
 
-        # Step 1: BM25 routing
+        # Step 0: Semantic cache check
+        cached, query_emb = await self.cache.get(query, collection_name=collection_name)
+        if cached is not None:
+            answer, similarity = cached
+            logger.info(
+                "[PIPELINE-STREAM] cache hit similarity=%.4f answer_len=%d (%.2fs)",
+                similarity, len(answer), time.perf_counter() - start,
+            )
+            # Simulate streaming for consistent UX (~10ms per word)
+            words = answer.split(" ")
+            for i, word in enumerate(words):
+                separator = " " if i < len(words) - 1 else ""
+                yield word + separator
+                await asyncio.sleep(0.01)
+            return
+
+        # Step 1: Combined routing (BM25 + multi-hop in one LLM call)
         t0 = time.perf_counter()
-        if use_bm25 is None:
-            requires_bm25 = await self._should_use_bm25(query)
+        if use_bm25 is not None:
+            routing = await self.generator.route_query(query)
+            routing["use_bm25"] = use_bm25
         else:
-            requires_bm25 = use_bm25
+            routing = await self.generator.route_query(query)
+        requires_bm25 = routing["use_bm25"]
         logger.info(
-            "[ROUTER] BM25=%s (decided in %.2fs)",
-            "YES" if requires_bm25 else "NO", time.perf_counter() - t0,
+            "[ROUTER] bm25=%s multi_hop=%s (decided in %.2fs)",
+            "YES" if requires_bm25 else "NO",
+            "YES" if routing["is_multi_hop"] else "NO",
+            time.perf_counter() - t0,
         )
 
-        # Step 2: Multi-hop decomposition
+        # Step 2: Decomposition (only calls LLM if multi-hop)
         t_decomp = time.perf_counter()
-        sub_queries = await self.generator._decompose_query(query)
+        sub_queries = await self.generator._decompose_query(query, is_multi_hop=routing["is_multi_hop"])
         is_multi_hop = len(sub_queries) > 1
         logger.info(
             "[DECOMPOSE] multi_hop=%s sub_queries=%d %r (in %.2fs)",
@@ -252,16 +298,22 @@ class HybridPipeline:
         # Step 5: Streaming generation
         t3 = time.perf_counter()
         chunk_count = 0
+        full_chunks: List[str] = []
         async for chunk in self.generator.generate_answer_stream(
             query=query,
             contexts=contexts,
             session_id=session_id,
         ):
             chunk_count += 1
+            full_chunks.append(chunk)
             yield chunk
         logger.info(
             "[GENERATION-STREAM] %d chunks (in %.2fs)", chunk_count, time.perf_counter() - t3,
         )
+
+        # Store the complete answer in semantic cache (reuse embedding from Step 0)
+        complete_answer = "".join(full_chunks)
+        await self.cache.store(query, complete_answer, collection_name=collection_name, query_embedding=query_emb)
 
         total = time.perf_counter() - start
         logger.info(

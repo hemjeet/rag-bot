@@ -23,6 +23,11 @@ async def init_pool():
         max_size=settings.db_pool_max_size,
         open=False,
         configure=register_vector_async,
+        # Ping connections before handing them out to detect server-side closures
+        check=AsyncConnectionPool.check_connection,
+        # Discard connections idle for more than 5 minutes (Supabase / cloud PG
+        # aggressively kills idle connections, often after ~60-300s)
+        max_idle=300,
     )
     await pool.open()
     logger.info("PostgreSQL connection pool opened successfully.")

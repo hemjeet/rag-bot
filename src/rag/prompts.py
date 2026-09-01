@@ -4,6 +4,7 @@ Keeping prompts in a single file makes them easier to review, adjust, and test
 without touching the generation logic.
 """
 
+import json
 from typing import List
 
 
@@ -40,20 +41,65 @@ def build_bm25_router_prompt(query: str) -> str:
     )
 
 
-import json
+def build_combined_router_prompt(query: str) -> str:
+    """Build a single prompt that decides both BM25 routing and multi-hop in one LLM call."""
+    safe_query = json.dumps(query)
+
+    prompt = f"""You are an expert in legal document analysis. Analyze the following query and make TWO independent decisions.
+
+**Decision 1: BM25 Keyword Search (use_bm25)**
+Should exact keyword matching (BM25) be used alongside semantic search?
+Answer true if the query contains specific legal terms, section references, defined terms, statute numbers, or exact phrases that must match verbatim.
+
+**Decision 2: Multi-hop Reasoning (is_multi_hop)**
+Does answering this query require combining information from more than one section, clause, or concept?
+
+A query IS multi-hop if it does ANY of the following:
+- Combines two or more distinct legal concepts (e.g., liability + confidentiality, termination + notice period).
+- Asks about the intersection or relationship between different provisions.
+- References exceptions, conditions, or definitions that appear in a separate section.
+- Contains qualifiers that narrow a broad concept using a second concept (e.g., "liability cap FOR breach of confidentiality").
+
+A query is NOT multi-hop if it asks about a single, self-contained concept.
+
+Examples:
+- "What is the liability cap?" → {{"use_bm25": false, "is_multi_hop": false}}
+- "What does Section 7.1 say?" → {{"use_bm25": true, "is_multi_hop": false}}
+- "What is the liability cap for a breach of confidentiality?" → {{"use_bm25": true, "is_multi_hop": true}}
+- "What are the termination clauses and what notice period is required?" → {{"use_bm25": false, "is_multi_hop": true}}
+
+Return ONLY a JSON object with these two boolean fields. No markdown, no explanations.
+
+Query: {safe_query}
+"""
+    return prompt
+
 
 def build_multi_hop_prompt(query: str) -> str:
     # Safely escape the query so quotes/newlines cannot break the prompt
     safe_query = json.dumps(query)
-    
+
     prompt = f"""You are an expert in legal document analysis.
 
-Given the following query, determine if answering it requires information from more than one section or clause of a legal document.
+Given the following query, determine if answering it requires combining information from more than one section, clause, or concept in a legal document.
 
-A multi-hop query typically:
-- References exceptions, conditions, or definitions that appear elsewhere.
-- Asks for a comparison or combination of different provisions.
-- Cannot be answered from a single section alone.
+A query IS multi-hop if it does ANY of the following:
+- Combines two or more distinct legal concepts (e.g., liability + confidentiality, termination + notice period).
+- Asks about the intersection or relationship between different provisions.
+- References exceptions, conditions, or definitions that appear in a separate section.
+- Requires comparing or combining different clauses to produce a complete answer.
+- Contains qualifiers that narrow a broad concept using a second concept (e.g., "liability cap FOR breach of confidentiality").
+
+A query is NOT multi-hop if:
+- It asks about a single, self-contained concept (e.g., "What is the liability cap?").
+- It can be fully answered from one section or clause alone.
+
+Examples:
+- "What is the liability cap?" → {{"is_multi_hop": false}}
+- "What is the liability cap for a breach of confidentiality?" → {{"is_multi_hop": true}}
+- "What are the termination clauses?" → {{"is_multi_hop": false}}
+- "What are the termination clauses and what notice period is required?" → {{"is_multi_hop": true}}
+- "Under what conditions can Party A terminate the agreement, and what are the consequences?" → {{"is_multi_hop": true}}
 
 Return your answer strictly as a JSON object with a single boolean field "is_multi_hop".
 Do not include markdown, code blocks, explanations, or any text outside the JSON object.
@@ -62,8 +108,6 @@ Query: {safe_query}
 """
     return prompt
 
-
-import json
 
 def build_decomposition_prompt(query: str) -> str:
     # Safely escape the query to prevent prompt injection

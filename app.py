@@ -61,6 +61,24 @@ async def lifespan(app: FastAPI):
     app.state.generator = generator
     app.state.pipeline = pipeline
 
+    # 3. Warm up HTTP connections to avoid cold-start latency on first query.
+    #    This pre-establishes TLS connections to OpenAI (embeddings + router)
+    #    and DeepSeek (generation) so the first user request is fast.
+    try:
+        warmup_start = time.perf_counter()
+        await asyncio.gather(
+            embeddings.embed_query("warmup"),           # OpenAI embeddings connection
+            generator.router_client.chat.completions.create(  # OpenAI router connection
+                model=generator.router_model,
+                temperature=0.0,
+                messages=[{"role": "user", "content": "Reply with OK"}],
+                max_tokens=2,
+            ),
+        )
+        logger.info("HTTP connections warmed up in %.2fs.", time.perf_counter() - warmup_start)
+    except Exception as exc:
+        logger.warning("Connection warmup failed (non-fatal): %s", exc)
+
     logger.info("Database connection pool and RAG pipeline components initialized successfully.")
     try:
         yield
@@ -93,10 +111,12 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
-    logger.info(
-        "%s %s -> %d (%.1fms)",
-        request.method, request.url.path, response.status_code, duration_ms,
-    )
+    # Skip noisy Chainlit WebSocket polling logs
+    if not request.url.path.startswith("/chainlit/ws/"):
+        logger.info(
+            "%s %s -> %d (%.1fms)",
+            request.method, request.url.path, response.status_code, duration_ms,
+        )
     return response
 
 

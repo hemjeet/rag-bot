@@ -38,3 +38,20 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_update_content_tsv
 BEFORE INSERT OR UPDATE ON chunks
 FOR EACH ROW EXECUTE FUNCTION update_content_tsv();
+
+-- Semantic cache table
+CREATE TABLE IF NOT EXISTS semantic_cache (
+    id SERIAL PRIMARY KEY,
+    query_text TEXT NOT NULL,
+    query_embedding VECTOR(1536),
+    answer TEXT NOT NULL,
+    collection_name TEXT,
+    hit_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding
+    ON semantic_cache USING hnsw (query_embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_cache_collection
+    ON semantic_cache (collection_name);

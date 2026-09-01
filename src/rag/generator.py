@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, AsyncGenerator
 from openai import AsyncOpenAI
 from src.config import settings
 from src.rag.memory import MemoryManager
-from src.rag.prompts import build_bm25_router_prompt, build_system_prompt, build_multi_hop_prompt, build_decomposition_prompt
+from src.rag.prompts import build_bm25_router_prompt, build_system_prompt, build_multi_hop_prompt, build_decomposition_prompt, build_combined_router_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,11 @@ class Generator:
         client: Optional[AsyncOpenAI] = None,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
+        router_client: Optional[AsyncOpenAI] = None,
         router_model: Optional[str] = None,
         max_history_turns: int = 5,
     ):
+        # --- Generation client (DeepSeek or OpenAI) ---
         api_key = settings.deepseek_api_key or settings.openai_api_key
         use_deepseek = bool(settings.deepseek_api_key)
         base_url = settings.deepseek_base_url if use_deepseek else None
@@ -26,42 +28,56 @@ class Generator:
             api_key=api_key,
             base_url=base_url,
         )
-        # Default model names must match the provider actually being used.
         default_model = "deepseek-v4-flash" if use_deepseek else "gpt-4o-mini"
         self.model = model or settings.llm_model or default_model
         self.temperature = temperature if temperature is not None else settings.llm_temperature
-        self.router_model = router_model or settings.router_model or default_model
+
+        # --- Router client (always OpenAI for cheap/fast classification) ---
+        self.router_client = router_client or AsyncOpenAI(
+            api_key=settings.openai_api_key,
+        )
+        self.router_model = router_model or settings.router_model or "gpt-4o-mini"
         self.memory = MemoryManager(max_history=max_history_turns)
 
     
-    async def _is_multi_hop(self, query: str) -> bool:
-        """Determine whether the query requires information from multiple sections."""
-        start = time.perf_counter()
-        prompt = build_multi_hop_prompt(query)
+    async def route_query(self, query: str) -> Dict[str, bool]:
+        """Make BM25 and multi-hop decisions in a single LLM call.
 
-        response = await self.client.chat.completions.create(
+        Returns a dict with 'use_bm25' and 'is_multi_hop' boolean fields.
+        """
+        start = time.perf_counter()
+        prompt = build_combined_router_prompt(query)
+        response = await self.router_client.chat.completions.create(
             model=self.router_model,
             temperature=0.0,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
         )
-
         content = response.choices[0].message.content or "{}"
         parsed = json.loads(content)
-        decision = bool(parsed.get("is_multi_hop", False))
+        result = {
+            "use_bm25": bool(parsed.get("use_bm25", False)),
+            "is_multi_hop": bool(parsed.get("is_multi_hop", False)),
+        }
         logger.info(
-            "[MULTI-HOP] model='%s' raw_response='%s' decision=%s (%.2fs)",
+            "[ROUTER] model='%s' raw_response='%s' bm25=%s multi_hop=%s (%.2fs)",
             self.router_model, content.strip(),
-            "YES" if decision else "NO", time.perf_counter() - start,
+            "YES" if result["use_bm25"] else "NO",
+            "YES" if result["is_multi_hop"] else "NO",
+            time.perf_counter() - start,
         )
-        return decision
+        return result
 
-    async def _decompose_query(self, query: str) -> List[str]:
-        """Decompose a complex query into simpler sub-queries if multi-hop."""
+    async def _decompose_query(self, query: str, is_multi_hop: bool = False) -> List[str]:
+        """Decompose a complex query into simpler sub-queries if multi-hop.
+
+        When is_multi_hop is provided by the caller (from route_query), the
+        separate _is_multi_hop check is skipped, saving one LLM round-trip.
+        """
         start = time.perf_counter()
-        if await self._is_multi_hop(query):
+        if is_multi_hop:
             prompt = build_decomposition_prompt(query)
-            response = await self.client.chat.completions.create(
+            response = await self.router_client.chat.completions.create(
                 model=self.router_model,
                 temperature=0.0,
                 messages=[{"role": "user", "content": prompt}],
@@ -87,7 +103,7 @@ class Generator:
         """Determine whether BM25 (exact keyword search) significantly improves retrieval for this query."""
         start = time.perf_counter()
         prompt = build_bm25_router_prompt(query)
-        response = await self.client.chat.completions.create(
+        response = await self.router_client.chat.completions.create(
             model=self.router_model,
             temperature=0.0,
             messages=[{"role": "user", "content": prompt}],
