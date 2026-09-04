@@ -1,10 +1,15 @@
 import logging
 import time
 from typing import List, Optional, Tuple
-from src.db.session import get_pool
+from src.db.session import get_pool, db_breaker
 from src.rag.embeddings import embed_query
+from src.config import settings
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+# Max rows in semantic_cache to prevent unbounded growth
+_MAX_CACHE_ROWS = 50000
 
 
 class SemanticCache:
@@ -16,16 +21,25 @@ class SemanticCache:
         threshold (float): Minimum similarity score to consider a cache hit.
         ttl_hours (float | None): Time-to-live for cached entries in hours.
                                    None means entries never expire.
+        max_rows (int): Maximum rows allowed in the cache table.
     """
 
     def __init__(
         self,
         threshold: float = 0.95,
         ttl_hours: Optional[float] = None,
+        max_rows: int = _MAX_CACHE_ROWS,
     ):
         self.threshold = threshold
         self.ttl_hours = ttl_hours
+        self.max_rows = max_rows
 
+    @db_breaker
+    @retry(
+        stop=stop_after_attempt(settings.db_max_retries),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+    )
     async def get(
         self, query: str, collection_name: Optional[str] = None
     ) -> Tuple[Optional[Tuple[str, float]], List[float]]:
@@ -49,9 +63,7 @@ class SemanticCache:
                 params: list = [emb_str]
 
                 if self.ttl_hours is not None:
-                    conditions.append(
-                        "created_at >= now() - %s * interval '1 hour'"
-                    )
+                    conditions.append("created_at >= now() - %s * interval '1 hour'")
                     params.append(self.ttl_hours)
 
                 if collection_name is not None:
@@ -84,13 +96,22 @@ class SemanticCache:
                     )
                     logger.info(
                         "[CACHE-HIT] similarity=%.4f hit_count=%d -> %d time=%.2fs",
-                        similarity, prev_hits, prev_hits + 1, time.perf_counter() - start,
+                        similarity,
+                        prev_hits,
+                        prev_hits + 1,
+                        time.perf_counter() - start,
                     )
                     return (answer, similarity), query_emb
 
         logger.info("[CACHE-MISS] time=%.2fs", time.perf_counter() - start)
         return None, query_emb
 
+    @db_breaker
+    @retry(
+        stop=stop_after_attempt(settings.db_max_retries),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+    )
     async def store(
         self,
         query: str,
@@ -106,7 +127,9 @@ class SemanticCache:
         embedding API, saving one round-trip per uncached query.
         """
         start = time.perf_counter()
-        query_emb = query_embedding if query_embedding is not None else await embed_query(query)
+        query_emb = (
+            query_embedding if query_embedding is not None else await embed_query(query)
+        )
         emb_str = str(query_emb)
 
         pool = get_pool()
@@ -143,9 +166,31 @@ class SemanticCache:
                     """,
                     (query, emb_str, answer, collection_name),
                 )
+
+                # Evict oldest rows if over max_rows
+                await cur.execute(
+                    """
+                    DELETE FROM semantic_cache WHERE id IN (
+                        SELECT id FROM semantic_cache
+                        ORDER BY created_at ASC
+                        LIMIT GREATEST(0, (SELECT COUNT(*) FROM semantic_cache) - %s)
+                    )
+                    """,
+                    (self.max_rows,),
+                )
+                evicted = cur.rowcount
+                if evicted > 0:
+                    logger.info(
+                        "[CACHE-EVICT] removed %d old rows (max=%d)",
+                        evicted,
+                        self.max_rows,
+                    )
+
                 logger.info(
                     "[CACHE-STORE] query=%r collection=%s answer_len=%d (%.2fs)",
-                    query[:60], collection_name, len(answer),
+                    query[:60],
+                    collection_name,
+                    len(answer),
                     time.perf_counter() - start,
                 )
 
@@ -167,7 +212,8 @@ class SemanticCache:
                 deleted = cur.rowcount
                 logger.info(
                     "[CACHE-FLUSH] collection='%s' deleted=%d",
-                    collection_name, deleted,
+                    collection_name,
+                    deleted,
                 )
                 return deleted
 
@@ -191,6 +237,7 @@ class SemanticCache:
                 deleted = cur.rowcount
                 logger.info(
                     "[CACHE-CLEANUP] ttl_hours=%.1f deleted=%d",
-                    self.ttl_hours, deleted,
+                    self.ttl_hours,
+                    deleted,
                 )
                 return deleted

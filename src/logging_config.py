@@ -19,10 +19,15 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Third-party loggers that are very chatty at INFO level.
 _NOISY_LOGGERS = (
-    "httpx", "httpcore", "openai",
+    "httpx",
+    "httpcore",
+    "openai",
     "uvicorn.access",
-    "watchfiles", "numexpr", "numexpr.utils",
-    "psycopg", "psycopg_pool",
+    "watchfiles",
+    "numexpr",
+    "numexpr.utils",
+    "psycopg",
+    "psycopg_pool",
 )
 
 _configured = False

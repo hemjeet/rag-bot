@@ -1,9 +1,10 @@
 import logging
 import time
 from typing import List, Dict, Any, Optional
-from src.db.session import get_pool
+from src.db.session import get_pool, db_breaker
 from src.rag.embeddings import Embeddings
 from src.config import settings
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,12 @@ class DenseSearcher:
         self.embeddings = embeddings or Embeddings()
         self.top_k = top_k
 
+    @db_breaker
+    @retry(
+        stop=stop_after_attempt(settings.db_max_retries),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+    )
     async def search(
         self,
         query: str,
@@ -60,9 +67,14 @@ class DenseSearcher:
         logger.info(
             "[DENSE] query=%r collection='%s' top_k=%d results=%d "
             "top_scores=[%s] embed=%.2fs db=%.2fs total=%.2fs",
-            _truncate(query), collection_name, k, len(results),
+            _truncate(query),
+            collection_name,
+            k,
+            len(results),
             ", ".join(top_scores) if top_scores else "none",
-            embed_time, db_time, time.perf_counter() - start,
+            embed_time,
+            db_time,
+            time.perf_counter() - start,
         )
         return results
 

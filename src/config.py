@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 from pydantic import Field
@@ -5,9 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # pydantic-settings reads environment variables case-insensitively by
-    # default, so field names like ``database_url`` map to ``DATABASE_URL``.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Reads directly from os.environ (e.g. on Vercel), with optional fallback
+    # to a local .env file if present during local development.
+    model_config = SettingsConfigDict(
+        env_file=".env" if os.path.exists(".env") else None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     database_url: str = Field(...)
     openai_api_key: str = Field(...)
@@ -36,6 +41,20 @@ class Settings(BaseSettings):
     # Logging.
     log_level: str = Field("INFO")
     log_file: str = Field("agent.log")
+
+    # --- Resiliency Settings ---
+    # Tenacity (Retries)
+    llm_max_retries: int = Field(3, description="Max retries for transient LLM errors")
+    db_max_retries: int = Field(3, description="Max retries for transient DB errors")
+    embed_max_retries: int = Field(3, description="Max retries for transient embedding errors")
+    
+    # Circuit Breaker (aiobreaker)
+    llm_cb_failures: int = Field(5, description="Failures before LLM circuit trips")
+    llm_cb_timeout: int = Field(30, description="Seconds to wait in Half-Open state")
+    db_cb_failures: int = Field(5, description="Failures before DB circuit trips")
+    db_cb_timeout: int = Field(15, description="Seconds to wait in Half-Open state")
+    embed_cb_failures: int = Field(5, description="Failures before embedding circuit trips")
+    embed_cb_timeout: int = Field(15, description="Seconds to wait in Half-Open state")
 
 
 settings = Settings()

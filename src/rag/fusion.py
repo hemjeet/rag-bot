@@ -48,15 +48,21 @@ class ReciprocalRankFusion:
         # Log summary
         logger.info(
             "[FUSION] dense=%d keyword=%d unique=%d -> top_n=%d output=%d rrf_k=%d",
-            len(dense_results), len(keyword_results), len(rrf_scores), n,
-            len(fused), self.k,
+            len(dense_results),
+            len(keyword_results),
+            len(rrf_scores),
+            n,
+            len(fused),
+            self.k,
         )
 
         # Log each retrieved chunk with its ID, RRF score, and text preview
         for rank, doc_id in enumerate(sorted_ids[:n]):
             logger.info(
                 "[CHUNK] rank=%d id='%s' rrf_score=%.6f preview=%r",
-                rank + 1, doc_id, rrf_scores[doc_id],
+                rank + 1,
+                doc_id,
+                rrf_scores[doc_id],
                 _preview(doc_map[doc_id]),
             )
 

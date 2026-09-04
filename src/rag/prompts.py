@@ -10,6 +10,17 @@ from typing import List
 
 def build_system_prompt(contexts: List[str]) -> str:
     """Build the strict legal-only system prompt from the retrieved contexts."""
+    if not contexts:
+        return (
+            'You are "Legal RAG Assistant", a strict legal assistant for a legal '
+            "document repository.\n\n"
+            "No relevant document context was found for the user's question.\n"
+            "Politely inform the user that you could not find relevant information "
+            "in the documents and suggest they rephrase their question or check "
+            "whether the relevant documents have been uploaded.\n"
+            "Never fabricate legal information.\n"
+        )
+
     context_block = "\n\n".join(contexts)
     return (
         'You are "Legal RAG Assistant", a strict legal assistant for a legal '
@@ -63,10 +74,10 @@ A query IS multi-hop if it does ANY of the following:
 A query is NOT multi-hop if it asks about a single, self-contained concept.
 
 Examples:
-- "What is the liability cap?" → {{"use_bm25": false, "is_multi_hop": false}}
-- "What does Section 7.1 say?" → {{"use_bm25": true, "is_multi_hop": false}}
-- "What is the liability cap for a breach of confidentiality?" → {{"use_bm25": true, "is_multi_hop": true}}
-- "What are the termination clauses and what notice period is required?" → {{"use_bm25": false, "is_multi_hop": true}}
+- "What is the liability cap?" -> {{"use_bm25": false, "is_multi_hop": false}}
+- "What does Section 7.1 say?" -> {{"use_bm25": true, "is_multi_hop": false}}
+- "What is the liability cap for a breach of confidentiality?" -> {{"use_bm25": true, "is_multi_hop": true}}
+- "What are the termination clauses and what notice period is required?" -> {{"use_bm25": false, "is_multi_hop": true}}
 
 Return ONLY a JSON object with these two boolean fields. No markdown, no explanations.
 
@@ -76,7 +87,6 @@ Query: {safe_query}
 
 
 def build_multi_hop_prompt(query: str) -> str:
-    # Safely escape the query so quotes/newlines cannot break the prompt
     safe_query = json.dumps(query)
 
     prompt = f"""You are an expert in legal document analysis.
@@ -95,11 +105,11 @@ A query is NOT multi-hop if:
 - It can be fully answered from one section or clause alone.
 
 Examples:
-- "What is the liability cap?" → {{"is_multi_hop": false}}
-- "What is the liability cap for a breach of confidentiality?" → {{"is_multi_hop": true}}
-- "What are the termination clauses?" → {{"is_multi_hop": false}}
-- "What are the termination clauses and what notice period is required?" → {{"is_multi_hop": true}}
-- "Under what conditions can Party A terminate the agreement, and what are the consequences?" → {{"is_multi_hop": true}}
+- "What is the liability cap?" -> {{"is_multi_hop": false}}
+- "What is the liability cap for a breach of confidentiality?" -> {{"is_multi_hop": true}}
+- "What are the termination clauses?" -> {{"is_multi_hop": false}}
+- "What are the termination clauses and what notice period is required?" -> {{"is_multi_hop": true}}
+- "Under what conditions can Party A terminate the agreement, and what are the consequences?" -> {{"is_multi_hop": true}}
 
 Return your answer strictly as a JSON object with a single boolean field "is_multi_hop".
 Do not include markdown, code blocks, explanations, or any text outside the JSON object.
@@ -110,9 +120,8 @@ Query: {safe_query}
 
 
 def build_decomposition_prompt(query: str) -> str:
-    # Safely escape the query to prevent prompt injection
     safe_query = json.dumps(query)
-    
+
     prompt = f"""You are an expert legal document analyst. Your task is to break down complex user queries into a list of simpler, self-contained sub-queries that can each be answered independently from a legal document.
 
 Decomposition rules:
