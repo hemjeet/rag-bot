@@ -56,7 +56,9 @@ class Generator:
     @llm_breaker
     @retry(
         stop=stop_after_attempt(settings.llm_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=1, min=settings.llm_retry_min, max=settings.llm_retry_max
+        ),
         reraise=True,
     )
     async def route_query(self, query: str) -> Dict[str, bool]:
@@ -100,7 +102,9 @@ class Generator:
     @llm_breaker
     @retry(
         stop=stop_after_attempt(settings.llm_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=1, min=settings.llm_retry_min, max=settings.llm_retry_max
+        ),
         reraise=True,
     )
     async def decompose_query(
@@ -178,7 +182,9 @@ class Generator:
     @llm_breaker
     @retry(
         stop=stop_after_attempt(settings.llm_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=1, min=settings.llm_retry_min, max=settings.llm_retry_max
+        ),
         reraise=True,
     )
     async def generate_answer(
@@ -231,11 +237,6 @@ class Generator:
         return answer
 
     @llm_breaker
-    @retry(
-        stop=stop_after_attempt(settings.llm_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        reraise=True,
-    )
     async def generate_answer_stream(
         self,
         query: str,

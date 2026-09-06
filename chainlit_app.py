@@ -37,11 +37,12 @@ cl_data._data_layer = None
 cl_data._data_layer_initialized = True
 
 from src.logging_config import setup_logging  # noqa: E402
+from src.config import settings
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION = "legal_documents"
+DEFAULT_COLLECTION = settings.default_collection
 
 
 def _get_pipeline():

@@ -46,21 +46,81 @@ class SemanticCache:
         """
         Retrieve a cached answer if a semantically similar query exists.
 
+        Two-phase lookup:
+          Phase 1 — Fast pg_trgm text similarity (no embedding API call).
+          Phase 2 — Semantic vector cosine similarity (calls embedding API).
+
         Returns a tuple of (cache_result, query_embedding):
         - cache_result is (answer, similarity) if similarity >= threshold, else None.
         - query_embedding is always returned so callers can reuse it for store(),
           avoiding a redundant embedding API call on cache misses.
         """
         start = time.perf_counter()
-        query_emb = await embed_query(query)
-        emb_str = str(query_emb)
-
         pool = get_pool()
+
         async with pool.connection() as conn:
+            # --- Phase 1: Fast Fuzzy Text Match (pg_trgm) ---
             async with conn.cursor() as cur:
-                # Build query with optional TTL and collection filters
-                conditions: List[str] = []
-                params: list = [emb_str]
+                conditions = ["query_text %% %s"]
+                params: list = [query]
+
+                if self.ttl_hours is not None:
+                    conditions.append("created_at >= now() - %s * interval '1 hour'")
+                    params.append(self.ttl_hours)
+
+                if collection_name is not None:
+                    conditions.append("collection_name = %s")
+                    params.append(collection_name)
+
+                where_clause = "WHERE " + " AND ".join(conditions)
+
+                await cur.execute(
+                    f"""
+                    SELECT id, answer, hit_count,
+                           similarity(query_text, %s) AS sim,
+                           query_embedding
+                    FROM semantic_cache
+                    {where_clause}
+                    ORDER BY sim DESC
+                    LIMIT 1
+                    """,
+                    (query, *params),
+                )
+                row = await cur.fetchone()
+
+                if row and row[3] >= settings.cache_fuzzy_threshold:
+                    cache_id, answer, prev_hits, sim, q_emb_raw = row
+                    await cur.execute(
+                        "UPDATE semantic_cache SET hit_count = hit_count + 1 WHERE id = %s",
+                        (cache_id,),
+                    )
+                    q_emb_list = (
+                        q_emb_raw.tolist()
+                        if hasattr(q_emb_raw, "tolist")
+                        else list(q_emb_raw)
+                    )
+                    logger.info(
+                        "[CACHE-HIT-FUZZY] similarity=%.4f hit_count=%d -> %d time=%.2fs",
+                        sim,
+                        prev_hits,
+                        prev_hits + 1,
+                        time.perf_counter() - start,
+                    )
+                    return (answer, float(sim)), q_emb_list
+
+            logger.debug(
+                "[CACHE-MISS-FUZZY] no match above %.2f (%.2fs)",
+                settings.cache_fuzzy_threshold,
+                time.perf_counter() - start,
+            )
+
+            # --- Phase 2: Semantic Vector Fallback ---
+            query_emb = await embed_query(query)
+            emb_str = str(query_emb)
+
+            async with conn.cursor() as cur:
+                conditions = []
+                params = [emb_str]
 
                 if self.ttl_hours is not None:
                     conditions.append("created_at >= now() - %s * interval '1 hour'")

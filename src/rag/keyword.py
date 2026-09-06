@@ -26,7 +26,7 @@ class KeywordSearcher:
         self,
         query: str,
         top_k: Optional[int] = None,
-        collection_name: str = "legal_documents",
+        collection_name: str = settings.default_collection,
     ) -> List[Dict[str, Any]]:
         k = top_k if top_k is not None else self.top_k
         start = time.perf_counter()
@@ -69,7 +69,7 @@ _default_keyword_searcher = KeywordSearcher()
 async def keyword_search(
     query: str,
     top_k: int = settings.sparse_top_k,
-    collection_name: str = "legal_documents",
+    collection_name: str = settings.default_collection,
 ) -> List[Dict[str, Any]]:
     return await _default_keyword_searcher.search(
         query=query, top_k=top_k, collection_name=collection_name

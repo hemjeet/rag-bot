@@ -26,11 +26,19 @@ class Settings(BaseSettings):
     sparse_top_k: int = Field(10)
     rrf_k: int = Field(60)
     hybrid_top_n: int = Field(5)
+    cache_fuzzy_threshold: float = Field(
+        0.85, description="Min pg_trgm similarity for fast text cache hit"
+    )
+
+    # Default collection name (overridable via environment variable)
+    default_collection: str = Field(
+        "legal_documents", description="Default vector collection name"
+    )
 
     # Connection pool sizing. Keep this small when using Supabase's
     # session-mode pooler, which caps total connections (default 15).
     db_pool_min_size: int = Field(1)
-    db_pool_max_size: int = Field(3)
+    db_pool_max_size: int = Field(6)
 
     # When unset, the generator picks a sensible default based on which
     # provider key is configured (deepseek-chat vs gpt-4o-mini).
@@ -44,16 +52,22 @@ class Settings(BaseSettings):
 
     # --- Resiliency Settings ---
     # Tenacity (Retries)
-    llm_max_retries: int = Field(3, description="Max retries for transient LLM errors")
+    llm_max_retries: int = Field(2, description="Max retries for transient LLM errors")
+    llm_retry_min: float = Field(0.5, description="Min backoff seconds for LLM retries")
+    llm_retry_max: float = Field(4.0, description="Max backoff seconds for LLM retries")
     db_max_retries: int = Field(3, description="Max retries for transient DB errors")
-    embed_max_retries: int = Field(3, description="Max retries for transient embedding errors")
-    
+    embed_max_retries: int = Field(
+        3, description="Max retries for transient embedding errors"
+    )
+
     # Circuit Breaker (aiobreaker)
     llm_cb_failures: int = Field(5, description="Failures before LLM circuit trips")
     llm_cb_timeout: int = Field(30, description="Seconds to wait in Half-Open state")
     db_cb_failures: int = Field(5, description="Failures before DB circuit trips")
     db_cb_timeout: int = Field(15, description="Seconds to wait in Half-Open state")
-    embed_cb_failures: int = Field(5, description="Failures before embedding circuit trips")
+    embed_cb_failures: int = Field(
+        5, description="Failures before embedding circuit trips"
+    )
     embed_cb_timeout: int = Field(15, description="Seconds to wait in Half-Open state")
 
 

@@ -1,5 +1,6 @@
 -- Enable pgvector extension
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- Create collection table (if you want to support multiple collections)
 CREATE TABLE IF NOT EXISTS collections (
@@ -55,3 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding
 
 CREATE INDEX IF NOT EXISTS idx_semantic_cache_collection
     ON semantic_cache (collection_name);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_cache_query_trgm 
+    ON semantic_cache USING GIN (query_text gin_trgm_ops);

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from typing import List, Dict, Any, Optional, AsyncGenerator
+from src.config import settings
 from src.rag.dense import DenseSearcher
 from src.rag.keyword import KeywordSearcher
 from src.rag.fusion import ReciprocalRankFusion
@@ -30,7 +31,7 @@ class HybridPipeline:
         self.generator = generator or Generator()
         self.cache = cache or SemanticCache()
 
-    async def warmup(self, collection_name: str = "legal_documents") -> None:
+    async def warmup(self, collection_name: str = settings.default_collection) -> None:
         """Prime every HTTP + DB connection with a synthetic query.
 
         Runs the same code paths a real user query would hit (embedding API,
@@ -174,7 +175,7 @@ class HybridPipeline:
     async def run(
         self,
         query: str,
-        collection_name: str = "legal_documents",
+        collection_name: str = settings.default_collection,
         use_bm25: Optional[bool] = None,
         session_id: Optional[str] = None,
     ) -> str:
@@ -316,7 +317,7 @@ class HybridPipeline:
     async def run_stream(
         self,
         query: str,
-        collection_name: str = "legal_documents",
+        collection_name: str = settings.default_collection,
         use_bm25: Optional[bool] = None,
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
@@ -338,10 +339,7 @@ class HybridPipeline:
                 similarity,
                 time.perf_counter() - start,
             )
-            words = answer.split(" ")
-            for i, word in enumerate(words):
-                yield word + (" " if i < len(words) - 1 else "")
-                await asyncio.sleep(0.01)
+            yield answer
             return
 
         # Step 1: Routing

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from aiobreaker import CircuitBreakerError
 from pydantic import BaseModel, Field
 
+from src.config import settings
 from src.db.session import init_pool, close_pool, check_db_health, db_breaker
 from src.db import session as db_session
 from src.rag.pipeline import HybridPipeline
@@ -26,7 +27,7 @@ class QueryRequest(BaseModel):
         ..., min_length=1, max_length=10000, description="User query or question"
     )
     collection_name: str = Field(
-        "legal_documents", description="Target collection name"
+        settings.default_collection, description="Target collection name"
     )
     use_bm25: Optional[bool] = Field(
         None, description="Force BM25 enable/disable, or leave None for auto-routing"
@@ -141,9 +142,18 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/health/fast", tags=["Health"])
+async def health_check_fast():
+    """Sub-10ms health check — verifies pool + pipeline init, no DB round-trip."""
+    if db_session.pool is None or getattr(app.state, "pipeline", None) is None:
+        raise HTTPException(status_code=503, detail="Service unavailable")
+    return {"status": "healthy"}
+
+
 @app.get("/health/breakers", tags=["Health"])
 async def breaker_status():
     """Return the state of all circuit breakers for monitoring."""
+
     def _state(breaker):
         return {
             "state": breaker.state.name,
@@ -169,7 +179,9 @@ async def circuit_breaker_exception_handler(request: Request, exc: CircuitBreake
     logger.warning("Circuit breaker tripped: %s", exc)
     return JSONResponse(
         status_code=503,
-        content={"detail": "The service is temporarily overloaded. Please try again in 30 seconds."},
+        content={
+            "detail": "The service is temporarily overloaded. Please try again in 30 seconds."
+        },
     )
 
 
