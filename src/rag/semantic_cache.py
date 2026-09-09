@@ -26,7 +26,7 @@ class SemanticCache:
 
     def __init__(
         self,
-        threshold: float = 0.95,
+        threshold: float = settings.cache_semantic_threshold,
         ttl_hours: Optional[float] = None,
         max_rows: int = _MAX_CACHE_ROWS,
     ):

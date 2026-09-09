@@ -48,11 +48,10 @@ class DenseSearcher:
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    """
-                    SELECT c.id, c.document, (c.embedding <=> %s::vector) AS distance
-                    FROM chunks c
-                    JOIN collections col ON c.collection_id = col.uuid
-                    WHERE col.name = %s
+                    f"""
+                    SELECT c.id, c.content AS document, c.content_type, c.asset_key, (c.embedding <=> %s::vector) AS distance
+                    FROM {settings.vector_table_name} c
+                    WHERE c.collection_name = %s
                     ORDER BY distance ASC
                     LIMIT %s
                     """,
@@ -61,7 +60,16 @@ class DenseSearcher:
                 rows = await cur.fetchall()
         db_time = time.perf_counter() - t1
 
-        results = [{"id": r[0], "text": r[1], "score": float(r[2])} for r in rows]
+        results = [
+            {
+                "id": r[0],
+                "text": r[1],
+                "content_type": r[2],
+                "asset_key": r[3],
+                "score": float(r[4]),
+            }
+            for r in rows
+        ]
         top_scores = [f"{r['score']:.4f}" for r in results[:3]]
 
         logger.info(

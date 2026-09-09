@@ -26,14 +26,16 @@ def test_rrf_fuses_and_orders_results():
         {"id": "b", "text": "Passage B"},
         {"id": "c", "text": "Passage C"},
     ]
-    texts = fusion.fuse(dense, keyword)
+    results = fusion.fuse(dense, keyword)
+    texts = [r["text"] for r in results]
     assert texts == ["Passage B", "Passage A", "Passage C"]
 
 
 def test_rrf_respects_top_n():
     fusion = ReciprocalRankFusion(k=60, top_n=1)
     dense = [{"id": "a", "text": "A"}, {"id": "b", "text": "B"}]
-    assert fusion.fuse(dense, []) == ["A"]
+    results = fusion.fuse(dense, [])
+    assert [r["text"] for r in results] == ["A"]
 
 
 def test_rrf_empty_results():
@@ -44,17 +46,19 @@ def test_rrf_empty_results():
 def test_rrf_single_result():
     fusion = ReciprocalRankFusion(k=60, top_n=5)
     dense = [{"id": "x", "text": "X"}]
-    assert fusion.fuse(dense, []) == ["X"]
+    results = fusion.fuse(dense, [])
+    assert [r["text"] for r in results] == ["X"]
 
 
 def test_rrf_deduplicates_across_lists():
     fusion = ReciprocalRankFusion(k=60, top_n=10)
     dense = [{"id": "a", "text": "A"}, {"id": "b", "text": "B"}]
     keyword = [{"id": "a", "text": "A"}, {"id": "c", "text": "C"}]
-    result = fusion.fuse(dense, keyword)
-    assert result.count("A") == 1
-    assert "B" in result
-    assert "C" in result
+    results = fusion.fuse(dense, keyword)
+    texts = [r["text"] for r in results]
+    assert texts.count("A") == 1
+    assert "B" in texts
+    assert "C" in texts
 
 
 # --- Memory Tests ---
@@ -123,16 +127,20 @@ async def test_memory_session_count():
 
 
 def test_system_prompt_with_context():
-    prompt = build_system_prompt(["Context A", "Context B"])
+    contexts = [
+        {"text": "Context A", "content_type": "text", "asset_key": None},
+        {"text": "Context B", "content_type": "text", "asset_key": None},
+    ]
+    prompt = build_system_prompt(contexts)
     assert "Context A" in prompt
     assert "Context B" in prompt
-    assert "Legal RAG Assistant" in prompt
+    assert "Document Assistant" in prompt
 
 
 def test_system_prompt_empty_context():
     prompt = build_system_prompt([])
     assert "No relevant document context" in prompt
-    assert "Legal RAG Assistant" in prompt
+    assert "Document Assistant" in prompt
     assert "Context:" not in prompt
 
 

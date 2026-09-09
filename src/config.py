@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(...)
     deepseek_api_key: Optional[str] = Field(None)
     deepseek_base_url: str = Field("https://api.deepseek.com")
+    s3_bucket_name: Optional[str] = Field(
+        None, description="S3 bucket for multimodal image assets"
+    )
 
     embedding_model: str = Field("text-embedding-3-small")
     embedding_dimension: int = Field(1536)
@@ -29,10 +32,18 @@ class Settings(BaseSettings):
     cache_fuzzy_threshold: float = Field(
         0.85, description="Min pg_trgm similarity for fast text cache hit"
     )
+    cache_semantic_threshold: float = Field(
+        0.88, description="Min cosine similarity for semantic vector cache hit"
+    )
 
     # Default collection name (overridable via environment variable)
     default_collection: str = Field(
-        "legal_documents", description="Default vector collection name"
+        "attention", description="Default vector collection name"
+    )
+
+    vector_table_name: str = Field(
+        "test_multimodal_chunks",
+        description="Name of the PostgreSQL table containing vector chunks",
     )
 
     # Connection pool sizing. Keep this small when using Supabase's

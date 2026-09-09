@@ -25,7 +25,7 @@ class ReciprocalRankFusion:
         dense_results: List[Dict[str, Any]],
         keyword_results: List[Dict[str, Any]],
         top_n: Optional[int] = None,
-    ) -> List[str]:
+    ) -> List[Dict[str, Any]]:
         n = top_n if top_n is not None else self.top_n
         rrf_scores = {}
         doc_map = {}
@@ -34,13 +34,13 @@ class ReciprocalRankFusion:
             doc_id = doc["id"]
             score = 1.0 / (self.k + rank + 1)
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + score
-            doc_map[doc_id] = doc["text"]
+            doc_map[doc_id] = doc
 
         for rank, doc in enumerate(keyword_results):
             doc_id = doc["id"]
             score = 1.0 / (self.k + rank + 1)
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + score
-            doc_map[doc_id] = doc["text"]
+            doc_map[doc_id] = doc
 
         sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
         fused = [doc_map[doc_id] for doc_id in sorted_ids[:n]]
@@ -63,7 +63,7 @@ class ReciprocalRankFusion:
                 rank + 1,
                 doc_id,
                 rrf_scores[doc_id],
-                _preview(doc_map[doc_id]),
+                _preview(doc_map[doc_id]["text"]),
             )
 
         return fused
@@ -76,5 +76,5 @@ def reciprocal_rank_fusion(
     dense_results: List[Dict[str, Any]],
     keyword_results: List[Dict[str, Any]],
     top_n: int = settings.hybrid_top_n,
-) -> List[str]:
+) -> List[Dict[str, Any]]:
     return _default_fusion.fuse(dense_results, keyword_results, top_n=top_n)

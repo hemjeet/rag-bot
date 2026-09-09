@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from typing import List, Optional, Dict, AsyncGenerator
+from typing import List, Optional, Dict, AsyncGenerator, Any
 from openai import AsyncOpenAI
 from src.config import settings
 from src.rag.memory import MemoryManager
@@ -190,7 +190,7 @@ class Generator:
     async def generate_answer(
         self,
         query: str,
-        contexts: List[str],
+        contexts: List[Dict[str, Any]],
         session_id: Optional[str] = None,
     ) -> str:
         """Generate an answer using retrieved context and conversation history."""
@@ -230,6 +230,27 @@ class Generator:
             )
             raise
 
+        # Generate fresh presigned URLs for image contexts and append missing ones
+        from src.rag.prompts import get_presigned_url
+
+        image_urls = []
+        for ctx in contexts:
+            ctype = ctx.get("content_type", "text")
+            asset_key = ctx.get("asset_key")
+            if ctype == "image" and asset_key:
+                url = await get_presigned_url(asset_key)
+                if url and not any(a == asset_key for a, _ in image_urls):
+                    image_urls.append((asset_key, url))
+
+        if image_urls:
+            missing_images = [
+                url for asset_key, url in image_urls if asset_key not in answer
+            ]
+            if missing_images:
+                answer += "\n\n**Related Images:**\n" + "".join(
+                    [f"![Figure]({url})\n" for url in missing_images]
+                )
+
         if session_id:
             await self.memory.add_message(session_id, "user", query)
             await self.memory.add_message(session_id, "assistant", answer)
@@ -240,7 +261,7 @@ class Generator:
     async def generate_answer_stream(
         self,
         query: str,
-        contexts: List[str],
+        contexts: List[Dict[str, Any]],
         session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """Stream the generated answer chunk-by-chunk."""
@@ -278,6 +299,32 @@ class Generator:
             )
 
             complete_answer = "".join(full_chunks)
+
+            # Generate fresh presigned URLs for image contexts and append missing ones
+            from src.rag.prompts import get_presigned_url
+
+            image_urls = []
+            for ctx in contexts:
+                ctype = ctx.get("content_type", "text")
+                asset_key = ctx.get("asset_key")
+                if ctype == "image" and asset_key:
+                    url = await get_presigned_url(asset_key)
+                    if url and not any(a == asset_key for a, _ in image_urls):
+                        image_urls.append((asset_key, url))
+
+            if image_urls:
+                missing_images = [
+                    url
+                    for asset_key, url in image_urls
+                    if asset_key not in complete_answer
+                ]
+                if missing_images:
+                    img_block = "\n\n**Related Images:**\n" + "".join(
+                        [f"![Figure]({url})\n" for url in missing_images]
+                    )
+                    yield img_block
+                    complete_answer += img_block
+
             if session_id and complete_answer:
                 await self.memory.add_message(session_id, "user", query)
                 await self.memory.add_message(session_id, "assistant", complete_answer)

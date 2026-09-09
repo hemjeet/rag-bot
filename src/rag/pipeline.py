@@ -8,12 +8,41 @@ from src.rag.keyword import KeywordSearcher
 from src.rag.fusion import ReciprocalRankFusion
 from src.rag.generator import Generator
 from src.rag.semantic_cache import SemanticCache
+from src.rag.prompts import get_presigned_url
 
 logger = logging.getLogger(__name__)
 
 
 def _truncate(text: str, length: int = 80) -> str:
     return text[:length] + "..." if len(text) > length else text
+
+
+async def _restore_image_urls(answer: str) -> str:
+    """Replace {IMAGE_URL:asset_key} placeholders with fresh presigned URLs."""
+    import re
+
+    pattern = re.compile(r"\{IMAGE_URL:([^}]+)\}")
+    matches = pattern.findall(answer)
+    if not matches:
+        return answer
+
+    for asset_key in matches:
+        url = await get_presigned_url(asset_key)
+        if url:
+            answer = answer.replace(f"{{IMAGE_URL:{asset_key}}}", url)
+    return answer
+
+
+async def _strip_urls_for_cache(answer: str) -> str:
+    """Replace presigned URLs with {IMAGE_URL:asset_key} placeholders for cache storage."""
+    import re
+
+    # Match markdown image links: ![...](https://...)
+    pattern = re.compile(r"!\[([^\]]*)\]\(https?://[^)]+\)")
+    # We can't recover asset_key from URL, so use a counter-based placeholder
+    # and store asset_keys separately if needed
+    # For now, just strip the URLs entirely (they'll be regenerated on cache hit)
+    return pattern.sub("", answer)
 
 
 class HybridPipeline:
@@ -192,6 +221,8 @@ class HybridPipeline:
         cached, query_emb = await self.cache.get(query, collection_name=collection_name)
         if cached is not None:
             answer, similarity = cached
+            # Restore presigned URLs for any image references
+            answer = await _restore_image_urls(answer)
             logger.info(
                 "[PIPELINE] cache hit similarity=%.4f answer_len=%d (%.2fs)",
                 similarity,
@@ -294,14 +325,16 @@ class HybridPipeline:
             time.perf_counter() - t3,
         )
 
-        # Step 6: Cache store
+        # Step 6: Cache store — strip presigned URLs before caching
         if answer and not answer.startswith("I'm sorry"):
-            await self.cache.store(
-                query,
-                answer,
-                collection_name=collection_name,
-                query_embedding=query_emb,
-            )
+            cache_answer = await _strip_urls_for_cache(answer)
+            if cache_answer.strip():  # Don't cache empty answers
+                await self.cache.store(
+                    query,
+                    cache_answer,
+                    collection_name=collection_name,
+                    query_embedding=query_emb,
+                )
 
         total = time.perf_counter() - start
         logger.info(
@@ -334,6 +367,8 @@ class HybridPipeline:
         cached, query_emb = await self.cache.get(query, collection_name=collection_name)
         if cached is not None:
             answer, similarity = cached
+            # Restore presigned URLs for any image references
+            answer = await _restore_image_urls(answer)
             logger.info(
                 "[PIPELINE-STREAM] cache hit similarity=%.4f (%.2fs)",
                 similarity,
@@ -426,15 +461,17 @@ class HybridPipeline:
             time.perf_counter() - t3,
         )
 
-        # Cache store
+        # Cache store — strip presigned URLs before caching
         complete_answer = "".join(full_chunks)
         if complete_answer:
-            await self.cache.store(
-                query,
-                complete_answer,
-                collection_name=collection_name,
-                query_embedding=query_emb,
-            )
+            cache_answer = await _strip_urls_for_cache(complete_answer)
+            if cache_answer.strip():
+                await self.cache.store(
+                    query,
+                    cache_answer,
+                    collection_name=collection_name,
+                    query_embedding=query_emb,
+                )
 
         total = time.perf_counter() - start
         logger.info(

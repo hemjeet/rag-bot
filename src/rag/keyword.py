@@ -34,12 +34,11 @@ class KeywordSearcher:
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    """
-                    SELECT c.id, c.document, ts_rank(c.content_tsv, plainto_tsquery('english', %s)) AS rank
-                    FROM chunks c
-                    JOIN collections col ON c.collection_id = col.uuid
-                    WHERE col.name = %s
-                      AND c.content_tsv @@ plainto_tsquery('english', %s)
+                    f"""
+                    SELECT c.id, c.content AS document, c.content_type, c.asset_key, ts_rank(to_tsvector('english', c.content), plainto_tsquery('english', %s)) AS rank
+                    FROM {settings.vector_table_name} c
+                    WHERE c.collection_name = %s
+                      AND to_tsvector('english', c.content) @@ plainto_tsquery('english', %s)
                     ORDER BY rank DESC
                     LIMIT %s
                     """,
@@ -47,7 +46,16 @@ class KeywordSearcher:
                 )
                 rows = await cur.fetchall()
 
-        results = [{"id": r[0], "text": r[1], "score": float(r[2])} for r in rows]
+        results = [
+            {
+                "id": r[0],
+                "text": r[1],
+                "content_type": r[2],
+                "asset_key": r[3],
+                "score": float(r[4]),
+            }
+            for r in rows
+        ]
         top_scores = [f"{r['score']:.4f}" for r in results[:3]]
 
         logger.info(
